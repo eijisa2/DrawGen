@@ -1,0 +1,711 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>DrawGen - AI Diagram Generator</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, Cantarell, 'Open Sans', 'Helvetica Neue', sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+        }
+
+        .container {
+            display: flex;
+            height: calc(100vh - 40px);
+            background: white;
+            border-radius: 20px;
+            overflow: hidden;
+            box-shadow: 0 20px 60px rgba(0, 0, 0, 0.3);
+        }
+
+        .chat-panel {
+            flex: 0 0 35%;
+            display: flex;
+            flex-direction: column;
+            background: #f8f9fa;
+            border-right: 1px solid #e9ecef;
+            padding: 20px;
+        }
+
+        .diagram-panel {
+            flex: 0 0 65%;
+            display: flex;
+            flex-direction: column;
+            background: white;
+        }
+
+        .header {
+            padding-bottom: 20px;
+            border-bottom: 2px solid #e9ecef;
+            margin-bottom: 20px;
+        }
+
+        .header h1 {
+            color: #333;
+            font-size: 24px;
+            font-weight: 600;
+            margin-bottom: 8px;
+        }
+
+        .header p {
+            color: #666;
+            font-size: 14px;
+            line-height: 1.5;
+        }
+
+        .chat-history {
+            flex: 1;
+            overflow-y: auto;
+            padding-right: 10px;
+            margin-bottom: 20px;
+        }
+
+        .message {
+            padding: 12px 16px;
+            margin-bottom: 12px;
+            border-radius: 12px;
+            max-width: 85%;
+            word-wrap: break-word;
+            animation: fadeIn 0.3s ease;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(10px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .user-message {
+            background: #007bff;
+            color: white;
+            margin-left: auto;
+            border-bottom-right-radius: 4px;
+        }
+
+        .assistant-message {
+            background: #e9ecef;
+            color: #333;
+            margin-right: auto;
+            border-bottom-left-radius: 4px;
+        }
+
+        .error-message {
+            background: #dc3545;
+            color: white;
+            margin-right: auto;
+            border-bottom-left-radius: 4px;
+        }
+
+        .status-message {
+            background: #28a745;
+            color: white;
+            margin-right: auto;
+            border-bottom-left-radius: 4px;
+            font-size: 12px;
+            padding: 8px 12px;
+        }
+
+        .input-area {
+            display: flex;
+            gap: 10px;
+            padding-top: 20px;
+            border-top: 1px solid #e9ecef;
+        }
+
+        #prompt-input { /* Changed from input to textarea */
+            flex: 1;
+            padding: 12px 16px;
+            border: 2px solid #dee2e6;
+            border-radius: 8px;
+            font-size: 14px;
+            font-family: inherit;
+            line-height: 1.5;
+            resize: vertical;
+            transition: border-color 0.2s;
+        }
+
+        #prompt-input:focus {
+            outline: none;
+            border-color: #007bff;
+        }
+
+        #send-button {
+            padding: 12px 24px;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-size: 14px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: transform 0.2s, box-shadow 0.2s;
+        }
+
+        #send-button:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(102, 126, 234, 0.4);
+        }
+
+        #send-button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+
+        .diagram-header {
+            padding: 20px;
+            border-bottom: 1px solid #e9ecef;
+        }
+
+        .diagram-header h2 {
+            color: #333;
+            font-size: 20px;
+            font-weight: 600;
+        }
+
+        .diagram-container {
+            flex: 1;
+            position: relative;
+            background: #f8f9fa;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        #diagram-iframe {
+            width: 100%;
+            height: 100%;
+            border: none;
+            background: white;
+        }
+
+        .iframe-placeholder {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            color: #666;
+            font-size: 14px;
+        }
+
+        .iframe-placeholder .spinner {
+            margin-bottom: 10px;
+        }
+
+        .loading {
+            display: none;
+            position: absolute;
+            top: 50%;
+            left: 50%;
+            transform: translate(-50%, -50%);
+            text-align: center;
+            z-index: 10;
+        }
+
+        .loading.active {
+            display: block;
+        }
+
+        .spinner {
+            width: 40px;
+            height: 40px;
+            border: 4px solid #f3f3f3;
+            border-top: 4px solid #667eea;
+            border-radius: 50%;
+            animation: spin 1s linear infinite;
+            margin: 0 auto 10px;
+        }
+
+        @keyframes spin {
+            0% { transform: rotate(0deg); }
+            100% { transform: rotate(360deg); }
+        }
+
+        .connection-status {
+            position: fixed;
+            bottom: 20px;
+            left: 20px;
+            padding: 8px 16px;
+            border-radius: 20px;
+            font-size: 12px;
+            font-weight: 600;
+            z-index: 1000;
+            transition: all 0.3s ease;
+        }
+
+        .designer-credit {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            font-size: 12px;
+            font-weight: 500;
+            color: rgba(255, 255, 255, 0.6);
+            z-index: 1000;
+        }
+
+        .connected {
+            background: #28a745;
+            color: white;
+        }
+
+        .disconnected {
+            background: #dc3545;
+            color: white;
+        }
+
+        .examples {
+            margin-top: 20px;
+            padding: 15px;
+            background: white;
+            border-radius: 10px;
+            border: 1px solid #e9ecef;
+        }
+
+        .examples h3 {
+            font-size: 14px;
+            color: #666;
+            margin-bottom: 10px;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        .example-prompt {
+            display: inline-block;
+            padding: 6px 12px;
+            margin: 4px;
+            background: #f8f9fa;
+            border: 1px solid #dee2e6;
+            border-radius: 6px;
+            font-size: 12px;
+            color: #495057;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+
+        .example-prompt:hover {
+            background: #e9ecef;
+            border-color: #adb5bd;
+        }
+
+        /* Scrollbar styling */
+        .chat-history::-webkit-scrollbar {
+            width: 6px;
+        }
+
+        .chat-history::-webkit-scrollbar-track {
+            background: #f1f1f1;
+            border-radius: 3px;
+        }
+
+        .chat-history::-webkit-scrollbar-thumb {
+            background: #c1c1c1;
+            border-radius: 3px;
+        }
+
+        .chat-history::-webkit-scrollbar-thumb:hover {
+            background: #a8a8a8;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <!-- Left Panel: Chat -->
+        <div class="chat-panel">
+            <div class="header">
+                <h1>DrawGen</h1>
+                <p>Describe a diagram and watch it appear in real-time.</p>
+            </div>
+
+            <div class="chat-history" id="chat-history">
+                <div class="message assistant-message">
+                    Welcome! Describe the diagram you want to create.
+                </div>
+                <div class="examples">
+                    <h3>Try these examples:</h3>
+                    <div class="example-prompt" onclick="useExample(this)">Show a flowchart for a user login process</div>
+                    <div class="example-prompt" onclick="useExample(this)">Draw a simple AWS architecture with EC2, S3, and RDS</div>
+                    <div class="example-prompt" onclick="useExample(this)">Create a Kubernetes cluster with a master and two worker nodes</div>
+                </div>
+            </div>
+
+            <div class="input-area">
+                <textarea id="prompt-input" 
+                          placeholder="Describe your diagram (e.g., 'Draw a network topology...')"
+                          rows="3"
+                          onkeydown="handleKeyPress(event)"></textarea>
+                <button id="send-button" onclick="sendPrompt()">Generate</button>
+            </div>
+        </div>
+
+        <!-- Right Panel: Diagram -->
+        <div class="diagram-panel">
+            <div class="diagram-header">
+                <h2>Live Diagram</h2>
+            </div>
+            <div class="diagram-container">
+                <div class="loading" id="loading">
+                    <div class="spinner"></div>
+                    <div>Generating diagram...</div>
+                </div>
+                <div class="iframe-placeholder" id="iframe-placeholder">
+                    <div class="spinner"></div>
+                    <div>Loading diagram editor...</div>
+                </div>
+                <iframe id="diagram-iframe" 
+                        src="https://embed.diagrams.net/?embed=1&proto=json&spin=1"
+                        allowfullscreen
+                        style="border: none; display: none;"></iframe>
+            </div>
+        </div>
+    </div>
+
+<div class="designer-credit" style="color: black;">
+        Designed by Eiji
+    </div>
+
+    <div class="connection-status disconnected" id="connection-status">
+        Connecting...
+    </div>
+
+    <script>
+        let socket = null;
+        let diagramReady = false;
+        let pendingPrompt = null;
+        const chatHistory = document.getElementById('chat-history');
+        const promptInput = document.getElementById('prompt-input');
+        const sendButton = document.getElementById('send-button');
+        const loading = document.getElementById('loading');
+        const connectionStatus = document.getElementById('connection-status');
+        const diagramIframe = document.getElementById('diagram-iframe');
+
+        // Connect to WebSocket
+        function connectWebSocket() {
+            const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+            const wsUrl = `${protocol}//${window.location.host}/ws`;
+            
+            socket = new WebSocket(wsUrl);
+            
+            socket.onopen = () => {
+                console.log('WebSocket connected');
+                connectionStatus.textContent = 'Connected';
+                connectionStatus.className = 'connection-status connected';
+                addMessage('Connected to server', 'assistant');
+            };
+            
+            socket.onclose = () => {
+                console.log('WebSocket disconnected');
+                connectionStatus.textContent = 'Disconnected - Reconnecting...';
+                connectionStatus.className = 'connection-status disconnected';
+                addMessage('Disconnected from server. Reconnecting...', 'assistant');
+                
+                // Try to reconnect after 3 seconds
+                setTimeout(connectWebSocket, 3000);
+            };
+            
+            socket.onerror = (error) => {
+                console.error('WebSocket error:', error);
+                connectionStatus.textContent = 'Connection Error';
+                connectionStatus.className = 'connection-status disconnected';
+            };
+            
+            socket.onmessage = (event) => {
+                const raw_data = event.data;
+                console.log('WebSocket message received, length:', raw_data.length);
+
+                // Fallback for old, raw text error messages
+                if (raw_data.startsWith('ERROR:')) {
+                    addMessage(raw_data.substring(6), 'error');
+                    loading.classList.remove('active');
+                    sendButton.disabled = false;
+                    return;
+                }
+
+                try {
+                    const payload = JSON.parse(raw_data);
+
+                    if (payload.type === 'xml') {
+                        console.log('Received XML payload');
+                        updateDiagram(payload.content);
+                    } else if (payload.type === 'text') {
+                        console.log('Received text payload');
+                        addMessage(payload.content, 'assistant');
+                        loading.classList.remove('active');
+                        sendButton.disabled = false;
+                    } else if (payload.type === 'error') {
+                        console.log('Received error payload');
+                        addMessage(payload.content, 'error');
+                        loading.classList.remove('active');
+                        sendButton.disabled = false;
+                    }
+                } catch (e) {
+                    // Fallback for old, raw XML responses (non-JSON)
+                    console.warn('Received non-JSON message, attempting to treat as raw XML.', e);
+                    updateDiagram(raw_data);
+                }
+            };
+        }
+
+        // Listen for draw.io initialization and export responses
+        window.addEventListener('message', (event) => {
+            console.log('Received message from iframe:', event.data);
+            
+            // Parse the data if it's a string
+            const data = typeof event.data === 'string' ? JSON.parse(event.data) : event.data;
+            
+            if (data.event === 'init') {
+                console.log('draw.io iframe initialized');
+                diagramReady = true;
+                addMessage('Diagram editor ready', 'status');
+            }
+            else if (data.event === 'export' && pendingPrompt) {
+                console.log('Received exported XML from draw.io');
+                console.log('Exported XML length:', data.xml ? data.xml.length : 0);
+                // Send prompt with current XML to server
+                sendToServer(pendingPrompt, data.xml || '');
+                pendingPrompt = null;
+            }
+        });
+
+        // Check if iframe is loaded
+        diagramIframe.onload = () => {
+            console.log('draw.io iframe loaded');
+            
+            // Hide placeholder and show iframe
+            document.getElementById('iframe-placeholder').style.display = 'none';
+            diagramIframe.style.display = 'block';
+            
+            // Note: draw.io will send 'init' event when ready
+            // We don't need to send ping, just wait for init event
+            console.log('Waiting for draw.io init event...');
+        };
+
+        // Send prompt to server
+        function sendPrompt() {
+            const prompt = promptInput.value.trim();
+            if (!prompt) return;
+            
+            // Add user message to chat
+            addMessage(prompt, 'user');
+            
+            // Clear input
+            promptInput.value = '';
+            
+            // Show loading
+            loading.classList.add('active');
+            sendButton.disabled = true;
+            
+            // Store the prompt
+            pendingPrompt = prompt;
+            
+            // First, export current XML from draw.io
+            if (diagramReady) {
+                try {
+                    console.log('Exporting current diagram XML...');
+                    diagramIframe.contentWindow.postMessage(
+                        JSON.stringify({ action: 'export', format: 'xml' }),
+                        'https://embed.diagrams.net'
+                    );
+                } catch (error) {
+                    console.error('Error exporting XML:', error);
+                    // If export fails, send prompt without current XML
+                    sendToServer(prompt, '');
+                }
+            } else {
+                // If diagram not ready yet, send prompt without current XML
+                sendToServer(prompt, '');
+            }
+        }
+        
+        // Send prompt and XML to server
+        function sendToServer(prompt, currentXml) {
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                const payload = JSON.stringify({
+                    prompt: prompt,
+                    currentXml: currentXml
+                });
+                console.log('Sending to server:', { prompt: prompt.substring(0, 50), hasXml: !!currentXml });
+                socket.send(payload);
+            } else {
+                addMessage('Not connected to server. Please wait...', 'error');
+                loading.classList.remove('active');
+                sendButton.disabled = false;
+                connectWebSocket();
+            }
+        }
+
+        // Update diagram with XML (called when we receive XML from server)
+        function updateDiagram(xml) {
+            console.log('updateDiagram called, diagramReady:', diagramReady, 'XML length:', xml.length);
+            
+            if (!diagramReady) {
+                addMessage('Diagram editor not ready yet. Please wait...', 'error');
+                // Try again in 1 second
+                setTimeout(() => {
+                    if (diagramReady) {
+                        updateDiagram(xml);
+                    } else {
+                        addMessage('Diagram editor still not ready. Please refresh.', 'error');
+                        loading.classList.remove('active');
+                        sendButton.disabled = false;
+                    }
+                }, 1000);
+                return;
+            }
+            
+            // Diagram is ready, send XML to draw.io
+            sendXmlToDiagram(xml);
+        }
+        
+        // Helper function to send XML to diagram
+        function sendXmlToDiagram(xml) {
+            try {
+                console.log('sendXmlToDiagram called with XML length:', xml.length);
+                console.log('First 200 chars of XML:', xml.substring(0, 200));
+                console.log('Last 200 chars of XML:', xml.substring(Math.max(0, xml.length - 200)));
+                
+                // Validate XML before sending
+                if (!xml.includes('<mxGraphModel')) {
+                    console.error('Invalid XML: missing <mxGraphModel');
+                    addMessage('Error: Generated XML is invalid (missing opening tag)', 'error');
+                    loading.classList.remove('active');
+                    sendButton.disabled = false;
+                    return;
+                }
+                
+                if (!xml.includes('</mxGraphModel>')) {
+                    console.error('Invalid XML: missing </mxGraphModel>');
+                    addMessage('Error: Generated XML is invalid (missing closing tag)', 'error');
+                    loading.classList.remove('active');
+                    sendButton.disabled = false;
+                    return;
+                }
+                
+                // Check for extra content after closing tag
+                const lastClosePos = xml.lastIndexOf('</mxGraphModel>');
+                if (lastClosePos + '</mxGraphModel>'.length < xml.length) {
+                    console.warn('Found extra content after closing tag, trimming...');
+                    xml = xml.substring(0, lastClosePos + '</mxGraphModel>'.length);
+                }
+                
+                // draw.io expects the message to be a JSON string
+                const message = JSON.stringify({
+                    action: 'load',
+                    xml: xml
+                });
+                
+                console.log('Posting message to draw.io iframe...');
+                
+                diagramIframe.contentWindow.postMessage(
+                    message,
+                    'https://embed.diagrams.net'
+                );
+                
+                console.log('Diagram update sent to embed.diagrams.net');
+                addMessage('Diagram updated successfully!', 'status');
+            } catch (error) {
+                console.error('Error updating diagram:', error);
+                addMessage('Error updating diagram: ' + error.message, 'error');
+            } finally {
+                // Always reset UI state
+                loading.classList.remove('active');
+                sendButton.disabled = false;
+            }
+        }
+
+        // Add message to chat history
+        function addMessage(text, type) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${type}-message`;
+            messageDiv.textContent = text;
+            
+            chatHistory.appendChild(messageDiv);
+            chatHistory.scrollTop = chatHistory.scrollHeight;
+            
+            // Log to console for debugging
+            console.log(`[${type.toUpperCase()}] ${text.substring(0, 100)}...`);
+        }
+
+        // Handle Enter key press
+        function handleKeyPress(event) {
+            // Send on Enter, but allow new lines with Shift+Enter
+            if (event.key === 'Enter' && !event.shiftKey) {
+                event.preventDefault(); // Prevent adding a new line
+                sendPrompt();
+            }
+        }
+
+        // Use example prompt
+        function useExample(element) {
+            promptInput.value = element.textContent;
+            promptInput.focus();
+        }
+
+        // Initialize
+        window.onload = () => {
+            connectWebSocket();
+            promptInput.focus();
+        };
+
+        // =================================================================
+        // Client-side Error Logging
+        // =================================================================
+        
+        // Global JavaScript errors
+        window.onerror = function(message, source, lineno, colno, error) {
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                const errorPayload = {
+                    type: 'client-error',
+                    error: {
+                        message: message,
+                        source: source,
+                        lineno: lineno,
+                        colno: colno,
+                        stack: error ? error.stack : 'No stack trace available'
+                    }
+                };
+                
+                try {
+                    socket.send(JSON.stringify(errorPayload));
+                    console.log('Client-side error reported to backend.');
+                } catch (e) {
+                    console.error('Failed to report client-side error to backend:', e);
+                }
+            }
+            // Let the browser's console also log the error
+            return false; 
+        };
+
+        // Unhandled Promise rejections
+        window.addEventListener('unhandledrejection', function(event) {
+            if (socket && socket.readyState === WebSocket.OPEN) {
+                const reason = event.reason || {};
+                const errorPayload = {
+                    type: 'client-error',
+                    error: {
+                        message: reason.message || 'Unhandled promise rejection',
+                        source: 'PromiseRejection',
+                        lineno: 'N/A',
+                        colno: 'N/A',
+                        stack: reason.stack || 'No stack trace available'
+                    }
+                };
+                try {
+                    socket.send(JSON.stringify(errorPayload));
+                    console.log('Unhandled promise rejection reported to backend.');
+                } catch (e) {
+                    console.error('Failed to report promise rejection to backend:', e);
+                }
+            }
+        });
+    </script>
+</body>
+</html>
