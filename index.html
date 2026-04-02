@@ -130,6 +130,9 @@
             line-height: 1.5;
             resize: vertical;
             transition: border-color 0.2s;
+            min-height: 60px;
+            max-height: 300px;
+            overflow-y: auto;
         }
 
         #prompt-input:focus {
@@ -387,6 +390,17 @@
         const connectionStatus = document.getElementById('connection-status');
         const diagramIframe = document.getElementById('diagram-iframe');
 
+        // Auto-resize textarea function
+        function autoResizeTextarea() {
+            promptInput.style.height = 'auto';
+            const newHeight = Math.min(promptInput.scrollHeight, 300);
+            promptInput.style.height = newHeight + 'px';
+        }
+
+        // Initialize textarea auto-resize
+        promptInput.addEventListener('input', autoResizeTextarea);
+        promptInput.addEventListener('focus', autoResizeTextarea);
+
         // Connect to WebSocket
         function connectWebSocket() {
             const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
@@ -498,7 +512,8 @@
             
             // Clear input
             promptInput.value = '';
-            
+            autoResizeTextarea(); // Reset textarea height
+
             // Show loading
             loading.classList.add('active');
             sendButton.disabled = true;
@@ -647,12 +662,15 @@
         function useExample(element) {
             promptInput.value = element.textContent;
             promptInput.focus();
+            autoResizeTextarea();
         }
 
         // Initialize
         window.onload = () => {
             connectWebSocket();
             promptInput.focus();
+            // Initial resize of textarea
+            autoResizeTextarea();
         };
 
         // =================================================================

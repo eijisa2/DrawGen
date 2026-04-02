@@ -3,6 +3,7 @@ import json
 import asyncio
 import xml.etree.ElementTree as ET
 import html
+import re
 from datetime import datetime
 from typing import Dict, Any
 
@@ -46,16 +47,160 @@ SYSTEM_PROMPT = """You are a world-class diagram generation assistant. Your prim
 - Your response MUST BE ONLY the raw mxGraphModel XML string.
 - Absolutely NO conversational text, explanations, comments, or markdown.
 - The response must start with '<mxGraphModel' and end with '</mxGraphModel>'.
+- **XML VALIDITY:** All attribute values must escape special XML characters:
+  * `<` must be escaped as `&lt;`
+  * `>` must be escaped as `&gt;`
+  * `&` must be escaped as `&amp;`
+  * `"` must be escaped as `&quot;` (in double-quoted attributes)
+  * `'` must be escaped as `&apos;` (in single-quoted attributes)
+- **HTML in attributes:** If you need line breaks inside attribute values, use `&lt;br&gt;` NOT `<br>`.
 """
+
+def remove_invalid_xml_chars(text: str) -> str:
+    """Remove characters that are invalid in XML 1.0."""
+    result = []
+    for char in text:
+        codepoint = ord(char)
+        # XML 1.0 valid characters: #x9 | #xA | #xD | [#x20-#xD7FF] | [#xE000-#xFFFD] | [#x10000-#x10FFFF]
+        if (codepoint == 0x9 or  # tab
+            codepoint == 0xA or  # newline
+            codepoint == 0xD or  # carriage return
+            0x20 <= codepoint <= 0xD7FF or
+            0xE000 <= codepoint <= 0xFFFD or
+            0x10000 <= codepoint <= 0x10FFFF):
+            result.append(char)
+        else:
+            # Replace invalid characters with a space
+            result.append(' ')
+    return ''.join(result)
+
+
+def escape_xml_special_chars(text: str) -> str:
+    """Escape unescaped & characters in XML content."""
+    # Escape & characters that are not already part of valid XML entities
+    # Valid XML entities: &amp; &lt; &gt; &quot; &apos; &#decimal; &#xhex;
+    # Using negative lookahead to skip already escaped entities
+    pattern = r'&(?!(amp|lt|gt|quot|apos|#\d+|#x[0-9a-fA-F]+);)'
+    # Replace unescaped & with &amp;
+    result = re.sub(pattern, '&amp;', text)
+    return result
+
+def fix_attribute_quotes(xml_content: str) -> str:
+    """Fix unescaped quotes inside XML attribute values."""
+    # Pattern to match attribute values enclosed in double quotes
+    # This regex matches attr="value" where value may contain escaped quotes or other characters
+    # It uses a non-greedy match for the value part
+    pattern = r'="([^"]*)"'
+
+    def replace_quotes(match):
+        value = match.group(1)
+        # Replace any unescaped double quotes inside the value with &quot;
+        # But avoid replacing already escaped &quot;
+        # Simple approach: replace " with &quot; only if not preceded by & and followed by quot;
+        # We'll do a simple replace and then fix double escaping later
+        # Actually, we need to be careful: if value contains &quot;, we should keep it
+        # So we temporarily mark &quot; then replace " then restore
+        value = value.replace('&quot;', '__QUOT__')
+        value = value.replace('"', '&quot;')
+        value = value.replace('__QUOT__', '&quot;')
+        return '="' + value + '"'
+
+    # Apply to all double-quoted attribute values
+    result = re.sub(pattern, replace_quotes, xml_content)
+
+    # Also handle single-quoted attributes
+    pattern_single = r"='([^']*)'"
+    def replace_single_quotes(match):
+        value = match.group(1)
+        value = value.replace("&apos;", '__APOS__')
+        value = value.replace("'", '&apos;')
+        value = value.replace('__APOS__', '&apos;')
+        return "='" + value + "'"
+
+    result = re.sub(pattern_single, replace_single_quotes, result)
+
+    return result
+
+
+
+
+def escape_html_in_attributes(xml_content: str) -> str:
+    """Escape HTML special characters inside XML attribute values.
+    Converts < to &lt;, > to &gt;, & to &amp;, etc. while preserving existing XML entities."""
+    # Pattern to match attribute values in double or single quotes
+    # Using non-greedy match for the value part
+    pattern = r'=(".*?"|\'.*?\')'
+
+    def escape_attribute_value(match):
+        full_match = match.group(0)  # ="value" or ='value'
+        quote_char = full_match[1]  # " or '
+        value = full_match[2:-1]  # content without quotes
+
+        # If value is empty, return as is
+        if not value:
+            return full_match
+
+        # First, protect existing XML entities by replacing them with placeholders
+        entity_map = {}
+        entity_counter = 0
+
+        # Find all &...; patterns (XML entities)
+        def protect_entity(m):
+            nonlocal entity_counter
+            placeholder = f"__ENTITY_{entity_counter}__"
+            entity_map[placeholder] = m.group(0)
+            entity_counter += 1
+            return placeholder
+
+        # Protect existing XML entities (must start with & and end with ;)
+        protected_value = re.sub(r'&[a-zA-Z0-9#]+;', protect_entity, value)
+
+        # Now escape special characters in the protected value
+        # Replace & first (but only & that aren't part of our placeholders)
+        # Our placeholders already don't contain &
+        protected_value = protected_value.replace('&', '&amp;')
+        protected_value = protected_value.replace('<', '&lt;')
+        protected_value = protected_value.replace('>', '&gt;')
+
+        # For quotes, we only need to escape if they match the surrounding quote type
+        if quote_char == '"':
+            protected_value = protected_value.replace('"', '&quot;')
+        else:  # single quote
+            protected_value = protected_value.replace("'", '&apos;')
+
+        # Restore the protected entities
+        for placeholder, entity in entity_map.items():
+            protected_value = protected_value.replace(placeholder, entity)
+
+        # Return the full attribute with escaped value
+        return f'={quote_char}{protected_value}{quote_char}'
+
+    # Apply to all attributes
+    # Use re.DOTALL to make . match newlines (attribute values can span multiple lines?)
+    result = re.sub(pattern, escape_attribute_value, xml_content, flags=re.DOTALL)
+    return result
+
 
 def clean_xml_content(xml_content: str, chat_history: list) -> str | None:
     """Clean and normalize XML content from DeepSeek, and validate its structure."""
     original_xml = xml_content
     print(f"[CLEANING] Starting cleaning. Input length: {len(xml_content)}")
-    
+
     # First, un-escape any potential HTML entities like &lt;
     xml_content = html.unescape(xml_content)
-    
+
+    # Remove invalid XML characters
+    xml_content = remove_invalid_xml_chars(xml_content)
+
+    # Fix unescaped quotes inside attribute values
+    xml_content = fix_attribute_quotes(xml_content)
+
+    # Escape HTML special characters inside attribute values (<, >, &, quotes)
+    xml_content = escape_html_in_attributes(xml_content)
+
+    # Escape XML special characters (especially unescaped &)
+    xml_content = escape_xml_special_chars(xml_content)
+
     # Simple prefix/suffix cleaning
     if xml_content.lower().startswith("```xml"):
         xml_content = xml_content[6:]
@@ -64,21 +209,36 @@ def clean_xml_content(xml_content: str, chat_history: list) -> str | None:
     if xml_content.lower().endswith("```"):
         xml_content = xml_content[:-3]
     xml_content = xml_content.strip()
-    if xml_content.lower().startswith("<?xml"):
-        end_decl = xml_content.find("?>")
-        if end_decl != -1:
-            xml_content = xml_content[end_decl + 2:].strip()
 
-    # Find the main mxGraphModel tags, case-insensitively
-    start_pos = xml_content.lower().find('<mxgraphmodel')
-    end_pos = xml_content.lower().rfind('</mxgraphmodel>')
+    # Find the main mxGraphModel tags using regex to avoid matching inside attribute values
+    # Pattern for opening tag: <mxGraphModel ... >
+    opening_pattern = re.compile(r'<mxGraphModel[^>]*>', re.IGNORECASE)
+    # Pattern for closing tag: </mxGraphModel>
+    closing_pattern = re.compile(r'</mxGraphModel>', re.IGNORECASE)
 
-    if start_pos == -1 or end_pos == -1:
-        print(f"[CLEANING] No complete <mxGraphModel> tags found. Assuming text response.")
-        return None
+    opening_match = opening_pattern.search(xml_content)
+    closing_matches = list(closing_pattern.finditer(xml_content))
 
-    # Extract content between the first opening and last closing tag
-    xml_content = xml_content[start_pos : end_pos + len('</mxGraphModel>')]
+    if not opening_match or not closing_matches:
+        # If opening tag exists but closing tag is missing, try to add it
+        if opening_match and not closing_matches:
+            print(f"[CLEANING] Opening <mxGraphModel> found but closing tag missing. Attempting to add closing tag.")
+            xml_content = xml_content + '</mxGraphModel>'
+            # Re-search for closing tag
+            closing_matches = list(closing_pattern.finditer(xml_content))
+            print(f"[CLEANING] Added closing tag. Found {len(closing_matches)} closing tags.")
+
+        if not opening_match or not closing_matches:
+            print(f"[CLEANING] No complete <mxGraphModel> tags found. Assuming text response.")
+            return None
+
+    # Use the last closing tag (in case there are nested or incorrect ones)
+    last_closing_match = closing_matches[-1]
+
+    # Extract content from start of opening tag to end of last closing tag
+    start_pos = opening_match.start()
+    end_pos = last_closing_match.end()
+    xml_content = xml_content[start_pos:end_pos]
     
     # Before returning, do a final validation by parsing the XML
     try:
@@ -86,10 +246,39 @@ def clean_xml_content(xml_content: str, chat_history: list) -> str | None:
         print("[VALIDATION] XML is well-formed. Returning content.")
         return xml_content
     except ET.ParseError as e:
-        print(f"[VALIDATION] Final XML is malformed: {e}. Returning error diagram.")
+        error_msg = str(e)
+        print(f"[VALIDATION] Final XML is malformed: {error_msg}. Returning error diagram.")
+
+        # Extract line and column from error message if available
+        line_num = None
+        col_num = None
+        line_match = re.search(r'line (\d+)', error_msg)
+        col_match = re.search(r'column (\d+)', error_msg)
+        if line_match:
+            line_num = int(line_match.group(1))
+        if col_match:
+            col_num = int(col_match.group(1))
+
+        # Prepare detailed error information
+        detailed_error = f"The cleaned XML could not be parsed. Error: {error_msg}\n\n"
+
+        if line_num is not None:
+            # Split XML into lines and get the problematic line
+            lines = xml_content.split('\n')
+            if line_num <= len(lines):
+                problematic_line = lines[line_num - 1]
+                detailed_error += f"Problematic line ({line_num}):\n{problematic_line}\n\n"
+                if col_num is not None and col_num <= len(problematic_line):
+                    # Add a marker for the column
+                    marker = ' ' * (col_num - 1) + '^'
+                    detailed_error += f"Column {col_num}: {marker}\n\n"
+
+        detailed_error += f"Cleaned XML (first 1000 chars):\n{xml_content[:1000]}\n\n"
+        detailed_error += f"Cleaned XML length: {len(xml_content)} chars"
+
         log_error_to_feedback(
             error_type="XMLParseError",
-            error_message=f"The cleaned XML could not be parsed. Error: {e}\n\nCleaned XML (first 500 chars):\n{xml_content[:500]}",
+            error_message=detailed_error,
             chat_history=chat_history,
             source="Backend"
         )
@@ -304,4 +493,4 @@ async def websocket_endpoint(websocket: WebSocket):
 
 if __name__ == "__main__":
     import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=8000)
+    uvicorn.run(app, host="0.0.0.0", port=8050)
